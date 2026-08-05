@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ gateway.gateway_id }} - 厂内产品状态监控{% endblock %}
+{% block content %}
+<h1>{{ gateway.gateway_id }}</h1>
+<p>位置：{{ gateway.location or '-' }}；最后上报：{{ gateway.last_seen_at or '-' }}</p>
+<p>Wi-Fi：{{ gateway.wifi_status or '-' }}；MQTT：{{ gateway.mqtt_status or '-' }}；SNTP：{{ gateway.sntp_status or '-' }}；SD：{{ gateway.sd_ready }}</p>
+<h2>广播记录</h2>{% include "broadcast_table.html" %}
+<h2>最近健康消息</h2>
+<table><thead><tr><th>时间</th><th>运行时长</th><th>原始消息</th></tr></thead><tbody>{% for item in health %}<tr><td>{{ item.recorded_at }}</td><td>{{ item.uptime_s }} s</td><td><code>{{ item.payload }}</code></td></tr>{% else %}<tr><td colspan="3">暂无健康消息</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

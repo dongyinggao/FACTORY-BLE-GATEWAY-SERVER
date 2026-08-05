@@ -1,0 +1,19 @@
+[Unit]
+Description=Factory BLE Gateway MQTT ingest and web service
+After=network-online.target postgresql.service mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ble_gateway
+Group=ble_gateway
+WorkingDirectory=/opt/factory-ble-gateway-server
+EnvironmentFile=/etc/factory-ble-gateway-server.env
+ExecStart=/opt/factory-ble-gateway-server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

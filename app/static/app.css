@@ -1,0 +1,9 @@
+:root { font-family: system-ui, sans-serif; color: #1f2937; background: #f8fafc; }
+body { margin: 0; }
+header { background: #0f766e; color: white; padding: 14px 5vw; display: flex; gap: 16px; }
+header a { color: white; text-decoration: none; font-weight: 700; }
+header span { background: #115e59; padding: 1px 8px; border-radius: 10px; font-size: .8rem; }
+main { margin: 24px auto; max-width: 1200px; padding: 0 18px; }
+table { width: 100%; border-collapse: collapse; background: white; margin: 10px 0 28px; }
+th, td { padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
+th { background: #f1f5f9; } a { color: #0f766e; } small, code { font-size: .8rem; overflow-wrap: anywhere; }

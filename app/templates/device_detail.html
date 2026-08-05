@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ device.device_mac }} - 厂内产品状态监控{% endblock %}
+{% block content %}
+<h1>{{ device.latest_name or device.device_mac }}</h1>
+<p>设备 MAC：{{ device.device_mac }}；首次观测：{{ device.first_seen_at }}；最后观测：{{ device.last_seen_at }}</p>
+<h2>各网关广播记录</h2>{% include "broadcast_table.html" %}
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>网关状态</h1>
+<table><thead><tr><th>网关</th><th>位置</th><th>最后上报</th><th>Wi-Fi</th><th>MQTT</th><th>SD</th></tr></thead><tbody>
+{% for item in gateways %}<tr><td><a href="/gateways/{{ item.gateway_id }}">{{ item.gateway_id }}</a></td><td>{{ item.location or '-' }}</td><td>{{ item.last_seen_at or '-' }}</td><td>{{ item.wifi_status or '-' }}</td><td>{{ item.mqtt_status or '-' }}</td><td>{{ 'OK' if item.sd_ready else ('ERR' if item.sd_ready is not none else '-') }}</td></tr>{% else %}<tr><td colspan="6">尚未收到网关消息</td></tr>{% endfor %}
+</tbody></table>
+<h2>最近广播记录</h2>
+{% include "broadcast_table.html" %}
+{% endblock %}
