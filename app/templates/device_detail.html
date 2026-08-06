@@ -1,7 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ device.device_mac }} - 厂内产品状态监控{% endblock %}
+{% block title %}{{ device.device_mac }} - 产品状态监控{% endblock %}
 {% block content %}
-<h1>{{ device.latest_name or device.device_mac }}</h1>
-<p>设备 MAC：{{ device.device_mac }}；首次观测：{{ device.first_seen_at }}；最后观测：{{ device.last_seen_at }}</p>
-<h2>各网关广播记录</h2>{% include "broadcast_table.html" %}
+<section class="page-heading"><div><p class="eyebrow">设备详情</p><h1>{{ device.latest_name or device.device_mac }}</h1><p>MAC：{{ device.device_mac }} · 首次观测 {{ device.first_seen_at|cn_time }} · 最后观测 {{ device.last_seen_at|cn_time }}</p></div></section>
+<section class="panel"><div class="panel-title"><div><p class="eyebrow">多网关观测</p><h2>广播记录</h2></div></div>{% include "broadcast_table.html" %}</section>
 {% endblock %}

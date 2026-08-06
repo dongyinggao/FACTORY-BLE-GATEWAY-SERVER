@@ -1,9 +1,34 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>网关状态</h1>
-<table><thead><tr><th>网关</th><th>位置</th><th>最后上报</th><th>Wi-Fi</th><th>MQTT</th><th>SD</th></tr></thead><tbody>
-{% for item in gateways %}<tr><td><a href="/gateways/{{ item.gateway_id }}">{{ item.gateway_id }}</a></td><td>{{ item.location or '-' }}</td><td>{{ item.last_seen_at or '-' }}</td><td>{{ item.wifi_status or '-' }}</td><td>{{ item.mqtt_status or '-' }}</td><td>{{ 'OK' if item.sd_ready else ('ERR' if item.sd_ready is not none else '-') }}</td></tr>{% else %}<tr><td colspan="6">尚未收到网关消息</td></tr>{% endfor %}
-</tbody></table>
-<h2>最近广播记录</h2>
-{% include "broadcast_table.html" %}
+<section class="page-heading">
+  <div><p class="eyebrow">实时概览</p><h1>设备广播状态</h1><p>更新时间：{{ now|cn_time }}</p></div>
+  <div class="legend"><span class="badge good">广播中</span> 表示网关正在观察该设备广播；不等同于全局在线状态。</div>
+</section>
+
+<section class="metrics">
+  <article class="metric"><span>网关在线</span><strong>{{ stats.gateway_online }}<small>/ {{ stats.gateway_total }}</small></strong><p>90 秒内收到健康消息</p></article>
+  <article class="metric accent"><span>正在广播的设备</span><strong>{{ stats.broadcasting_devices }}</strong><p>最近 90 秒有开始记录且未结束</p></article>
+  <article class="metric"><span>近 24 小时广播次数</span><strong>{{ stats.broadcast_24h }}</strong><p>按广播 ID 汇总</p></article>
+  <article class="metric {{ 'warn' if stats.pending_end else '' }}"><span>等待结束确认</span><strong>{{ stats.pending_end }}</strong><p>超过 90 秒仍未收到结束事件</p></article>
+</section>
+
+<section class="panel">
+  <div class="panel-title"><div><p class="eyebrow">当前重点</p><h2>正在广播</h2></div><span>{{ active_sessions|length }} 条观测</span></div>
+  <div class="active-grid">
+  {% for item in active_sessions %}
+    <article class="active-device"><div><span class="badge good">广播中</span><h3><a href="/devices/{{ item.device_mac }}">{{ item.device_name or item.device_mac }}</a></h3><p>{{ item.device_mac }} · 网关 <a href="/gateways/{{ item.gateway_id }}">{{ item.gateway_id }}</a></p></div><div class="duration"><span>已持续</span><strong>{{ display_duration(item, now) }}</strong><small>开始于 {{ item.started_at|cn_time }}</small></div></article>
+  {% else %}
+    <p class="empty">当前没有处于广播中的设备。</p>
+  {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title"><div><p class="eyebrow">采集端健康</p><h2>网关状态</h2></div><span>健康消息窗口：90 秒</span></div>
+  <div class="table-scroll"><table><thead><tr><th>网关</th><th>安装位置</th><th>状态</th><th>最后健康消息</th><th>Wi-Fi / MQTT</th><th>SD 卡</th></tr></thead><tbody>
+  {% for item in gateways %}<tr><td><a href="/gateways/{{ item.gateway_id }}">{{ item.gateway_id }}</a></td><td>{{ item.location or '-' }}</td><td><span class="badge {{ 'good' if gateway_state(item, now) == 'online' else 'muted' }}">{{ '在线' if gateway_state(item, now) == 'online' else '未连接' }}</span></td><td>{{ item.last_seen_at|cn_time }}</td><td>{{ item.wifi_status or '-' }} / {{ item.mqtt_status or '-' }}</td><td><span class="badge {{ 'good' if item.sd_ready else 'warn' if item.sd_ready is not none else 'muted' }}">{{ '正常' if item.sd_ready else '异常' if item.sd_ready is not none else '-' }}</span></td></tr>{% else %}<tr><td colspan="6" class="empty">尚未收到网关消息</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel"><div class="panel-title"><div><p class="eyebrow">可追溯记录</p><h2>最近广播</h2></div><span>显示最近 50 条</span></div>{% include "broadcast_table.html" %}</section>
 {% endblock %}

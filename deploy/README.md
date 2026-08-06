@@ -11,8 +11,8 @@ Run on `blegatewayserver` with an administrator account:
 ```bash
 sudo apt update
 sudo apt install -y postgresql postgresql-contrib python3-venv nginx
-sudo -u postgres createuser --pwprompt ble_gateway
-sudo -u postgres createdb -O ble_gateway ble_gateway
+sudo -u postgres createuser --pwprompt ble_gateway_app
+sudo -u postgres createdb -O ble_gateway_app factory_ble_gateway
 ```
 
 Use a generated database password. Store it only in
@@ -28,10 +28,19 @@ sudo -u ble_gateway python3 -m venv /opt/factory-ble-gateway-server/.venv
 sudo -u ble_gateway /opt/factory-ble-gateway-server/.venv/bin/pip install -r /opt/factory-ble-gateway-server/requirements.txt
 ```
 
+The UAT server currently cannot reach GitHub. Package and upload the committed
+repository from the development computer instead:
+
+```bash
+git archive --format=tar --output=/tmp/factory-ble-gateway-server.tar HEAD
+scp /tmp/factory-ble-gateway-server.tar ble_gateway@192.168.19.21:/tmp/
+ssh ble_gateway@192.168.19.21 'mkdir -p /opt/factory-ble-gateway-server && tar -xf /tmp/factory-ble-gateway-server.tar -C /opt/factory-ble-gateway-server'
+```
+
 If the server cannot access PyPI, use the Ubuntu-packaged runtime instead:
 
 ```bash
-sudo apt install -y python3-fastapi python3-sqlalchemy python3-paho-mqtt python3-uvicorn python3-psycopg python3-jinja2
+sudo apt install -y python3-fastapi python3-sqlalchemy python3-paho-mqtt python3-uvicorn python3-psycopg2 python3-jinja2
 sudo rm -rf /opt/factory-ble-gateway-server/.venv
 sudo -u ble_gateway python3 -m venv --system-site-packages /opt/factory-ble-gateway-server/.venv
 ```
@@ -39,8 +48,11 @@ sudo -u ble_gateway python3 -m venv --system-site-packages /opt/factory-ble-gate
 Create `/etc/factory-ble-gateway-server.env`:
 
 ```ini
-DATABASE_URL=postgresql+psycopg://ble_gateway:<database-password>@127.0.0.1:5432/ble_gateway
-MQTT_HOST=127.0.0.1
+# PyPI runtime: postgresql+psycopg://...
+# Ubuntu package fallback (SQLAlchemy 1.4): postgresql+psycopg2://...
+DATABASE_URL=postgresql+psycopg2://ble_gateway_app:<database-password>@127.0.0.1:5432/factory_ble_gateway
+# Current UAT Mosquitto listener is bound to this server interface, not loopback.
+MQTT_HOST=192.168.19.21
 MQTT_PORT=1883
 MQTT_TOPIC=factory/product-status/gateway/+/events
 MQTT_CLIENT_ID=factory-ble-gateway-ingest-uat
@@ -48,6 +60,13 @@ MQTT_CLIENT_ID=factory-ble-gateway-ingest-uat
 
 Then run `sudo chmod 600 /etc/factory-ble-gateway-server.env` and
 `sudo chown root:root /etc/factory-ble-gateway-server.env`.
+
+Initialize the schema and grant the application account access:
+
+```bash
+sudo -u postgres psql -d factory_ble_gateway -f migrations/001_initial.sql
+sudo -u postgres psql -d factory_ble_gateway -c 'GRANT USAGE ON SCHEMA public TO ble_gateway_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ble_gateway_app; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ble_gateway_app;'
+```
 
 ## 3. Start and verify
 
@@ -59,9 +78,9 @@ sudo systemctl status factory-ble-gateway-server
 curl http://127.0.0.1:8000/healthz
 ```
 
-Merge `deploy/nginx-factory-ble-gateway-server.conf` with the existing UAT
-server block, preserving its current certificate paths and OTA location. Test
-before reload: `sudo nginx -t && sudo systemctl reload nginx`.
+The supplied Nginx file is a complete UAT virtual host: it preserves `/ota/`
+and proxies all other routes to the web service. Back up the existing host
+configuration, then test before reload: `sudo nginx -t && sudo systemctl reload nginx`.
 
 ## 4. Acceptance
 

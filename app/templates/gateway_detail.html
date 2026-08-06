@@ -1,10 +1,8 @@
 {% extends "base.html" %}
-{% block title %}{{ gateway.gateway_id }} - 厂内产品状态监控{% endblock %}
+{% block title %}{{ gateway.gateway_id }} - 产品状态监控{% endblock %}
 {% block content %}
-<h1>{{ gateway.gateway_id }}</h1>
-<p>位置：{{ gateway.location or '-' }}；最后上报：{{ gateway.last_seen_at or '-' }}</p>
-<p>Wi-Fi：{{ gateway.wifi_status or '-' }}；MQTT：{{ gateway.mqtt_status or '-' }}；SNTP：{{ gateway.sntp_status or '-' }}；SD：{{ gateway.sd_ready }}</p>
-<h2>广播记录</h2>{% include "broadcast_table.html" %}
-<h2>最近健康消息</h2>
-<table><thead><tr><th>时间</th><th>运行时长</th><th>原始消息</th></tr></thead><tbody>{% for item in health %}<tr><td>{{ item.recorded_at }}</td><td>{{ item.uptime_s }} s</td><td><code>{{ item.payload }}</code></td></tr>{% else %}<tr><td colspan="3">暂无健康消息</td></tr>{% endfor %}</tbody></table>
+<section class="page-heading"><div><p class="eyebrow">网关详情</p><h1>{{ gateway.gateway_id }}</h1><p>{{ gateway.location or '未配置安装位置' }} · 最后上报 {{ gateway.last_seen_at|cn_time }}</p></div><span class="badge {{ 'good' if gateway_state(gateway, now) == 'online' else 'muted' }}">{{ '在线' if gateway_state(gateway, now) == 'online' else '未连接' }}</span></section>
+<section class="status-list"><span>Wi-Fi：<strong>{{ gateway.wifi_status or '-' }}</strong></span><span>MQTT：<strong>{{ gateway.mqtt_status or '-' }}</strong></span><span>SNTP：<strong>{{ gateway.sntp_status or '-' }}</strong></span><span>SD 卡：<strong>{{ '正常' if gateway.sd_ready else '异常' if gateway.sd_ready is not none else '-' }}</strong></span></section>
+<section class="panel"><div class="panel-title"><div><p class="eyebrow">本机观察</p><h2>广播记录</h2></div></div>{% include "broadcast_table.html" %}</section>
+<section class="panel"><div class="panel-title"><div><p class="eyebrow">诊断</p><h2>最近健康消息</h2></div></div><div class="table-scroll"><table><thead><tr><th>接收时间</th><th>运行时长</th><th>详细字段</th></tr></thead><tbody>{% for item in health %}<tr><td>{{ item.recorded_at|cn_time }}</td><td>{{ item.uptime_s }} 秒</td><td><details><summary>查看 JSON</summary><pre>{{ item.payload|tojson(indent=2) }}</pre></details></td></tr>{% else %}<tr><td colspan="3" class="empty">暂无健康消息</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}

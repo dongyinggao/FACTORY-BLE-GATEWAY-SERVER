@@ -69,6 +69,10 @@ def ingest_broadcast(session: Session, payload: dict[str, Any]) -> bool:
 
     _upsert_gateway(session, payload)
     _upsert_device(session, payload)
+    # BroadcastEvent has foreign keys to both rows. Flush parents explicitly:
+    # SQLAlchemy 1.4 used by the offline UAT runtime cannot infer ordering here
+    # because the lightweight ingest model deliberately has no ORM relations.
+    session.flush()
     event = BroadcastEvent(
         gateway_id=gateway_id,
         event_id=event_id,
