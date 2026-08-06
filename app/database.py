@@ -1,13 +1,12 @@
 from pathlib import Path
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.settings import settings_from_env
 
 
-class Base(DeclarativeBase):
-    pass
+Base = declarative_base()
 
 
 def create_database_engine(database_url: str | None = None):

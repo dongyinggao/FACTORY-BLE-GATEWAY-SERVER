@@ -28,6 +28,14 @@ sudo -u ble_gateway python3 -m venv /opt/factory-ble-gateway-server/.venv
 sudo -u ble_gateway /opt/factory-ble-gateway-server/.venv/bin/pip install -r /opt/factory-ble-gateway-server/requirements.txt
 ```
 
+If the server cannot access PyPI, use the Ubuntu-packaged runtime instead:
+
+```bash
+sudo apt install -y python3-fastapi python3-sqlalchemy python3-paho-mqtt python3-uvicorn python3-psycopg python3-jinja2
+sudo rm -rf /opt/factory-ble-gateway-server/.venv
+sudo -u ble_gateway python3 -m venv --system-site-packages /opt/factory-ble-gateway-server/.venv
+```
+
 Create `/etc/factory-ble-gateway-server.env`:
 
 ```ini
