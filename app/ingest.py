@@ -131,7 +131,7 @@ def _find_or_create_global_session(
 
     global_session = None
     if time_synced and started_at is not None:
-        global_session = session.scalar(
+        candidates = session.scalars(
             select(DeviceBroadcastSession)
             .where(
                 DeviceBroadcastSession.device_mac == device_mac,
@@ -140,6 +140,17 @@ def _find_or_create_global_session(
                 DeviceBroadcastSession.started_at <= started_at + FUSION_START_WINDOW,
             )
             .order_by(DeviceBroadcastSession.updated_at.desc())
+        ).all()
+        # A gateway's new broadcast_id is definitive evidence of a new local
+        # round.  Never collapse two local rounds from the same gateway, even
+        # if their start timestamps are very close.  Other gateways may still
+        # join the candidate session normally.
+        global_session = next(
+            (
+                candidate for candidate in candidates
+                if all(observer.gateway_id != gateway_id for observer in candidate.observers)
+            ),
+            None,
         )
     if global_session is None:
         # Unsynchronized timestamps intentionally create a standalone
@@ -223,6 +234,48 @@ def finalize_stale_global_sessions(session: Session, now: datetime | None = None
         row.updated_at = now
         closed += 1
     return closed
+
+
+def backfill_global_sessions(session: Session) -> int:
+    """Build fusion records from local sessions saved before fusion was deployed.
+
+    The observer uniqueness constraint makes the operation safe to run again.
+    It is intentionally separate from the live MQTT path so deployments can
+    backfill historical records in a controlled maintenance step.
+    """
+    created = 0
+    local_sessions = session.scalars(
+        select(BroadcastSession).order_by(BroadcastSession.started_at, BroadcastSession.id)
+    ).all()
+    for local_session in local_sessions:
+        existing = session.scalar(
+            select(DeviceBroadcastObserver.id).where(
+                DeviceBroadcastObserver.gateway_id == local_session.gateway_id,
+                DeviceBroadcastObserver.gateway_broadcast_id == local_session.broadcast_id,
+            )
+        )
+        if existing is not None:
+            continue
+        source_event = session.scalar(
+            select(BroadcastEvent)
+            .where(
+                BroadcastEvent.gateway_id == local_session.gateway_id,
+                BroadcastEvent.broadcast_id == local_session.broadcast_id,
+            )
+            .order_by(BroadcastEvent.received_at)
+        )
+        payload = {
+            "gateway_id": local_session.gateway_id,
+            "broadcast_id": local_session.broadcast_id,
+            "device_mac": local_session.device_mac,
+            "device_name": local_session.device_name,
+            "event": "BROADCAST_ENDED" if local_session.ended_at else "BROADCAST_STARTED",
+            "time_synced": bool(source_event.time_synced) if source_event else False,
+        }
+        _update_global_observation(session, payload, local_session)
+        created += 1
+    finalize_stale_global_sessions(session)
+    return created
 
 
 def ingest_broadcast(session: Session, payload: dict[str, Any]) -> bool:

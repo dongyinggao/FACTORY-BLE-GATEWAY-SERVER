@@ -66,7 +66,18 @@ Initialize the schema and grant the application account access:
 ```bash
 sudo -u postgres psql -d factory_ble_gateway -f migrations/001_initial.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/002_multi_gateway_fusion.sql
+sudo -u postgres psql -d factory_ble_gateway -f migrations/003_fusion_one_observer_per_gateway.sql
 sudo -u postgres psql -d factory_ble_gateway -c 'GRANT USAGE ON SCHEMA public TO ble_gateway_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ble_gateway_app; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ble_gateway_app;'
+```
+
+After introducing migration `002`, run the repeatable historical backfill once
+while the consumer is stopped. It links old per-gateway sessions into global
+sessions without altering raw MQTT events:
+
+```bash
+sudo systemctl stop factory-ble-gateway-server
+sudo -u ble_gateway /opt/factory-ble-gateway-server/.venv/bin/python -m app.backfill_fusion
+sudo systemctl start factory-ble-gateway-server
 ```
 
 ## 3. Start and verify

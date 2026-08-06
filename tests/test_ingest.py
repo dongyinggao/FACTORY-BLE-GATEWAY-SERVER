@@ -1,9 +1,9 @@
 from app.database import Base, create_database_engine
 from datetime import datetime, timedelta, timezone
 
-from app.ingest import finalize_stale_global_sessions, ingest_message
+from app.ingest import backfill_global_sessions, finalize_stale_global_sessions, ingest_message
 from app.models import BroadcastSession, DeviceBroadcastObserver, DeviceBroadcastSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 
@@ -99,6 +99,23 @@ def test_three_gateway_observations_merge_to_one_global_session():
         )).last_rssi == -50
 
 
+def test_two_rounds_from_one_gateway_are_never_merged():
+    engine = create_database_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory.begin() as session:
+        assert ingest_message(session, _broadcast(
+            "GW-01", "round-one", "round-1", "BROADCAST_STARTED", "2026-08-05T10:00:00+0800"
+        ))
+        assert ingest_message(session, _broadcast(
+            "GW-01", "round-two", "round-2", "BROADCAST_STARTED", "2026-08-05T10:00:07+0800"
+        ))
+    with session_factory() as session:
+        rows = session.scalars(select(DeviceBroadcastSession)).all()
+        assert len(rows) == 2
+        assert all(len(row.observers) == 1 for row in rows)
+
+
 def test_unsynchronized_events_do_not_merge_and_stale_session_closes():
     engine = create_database_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -123,3 +140,26 @@ def test_unsynchronized_events_do_not_merge_and_stale_session_closes():
         assert session.scalar(select(DeviceBroadcastSession).where(
             DeviceBroadcastSession.ended_at.is_not(None)
         )) is not None
+
+
+def test_backfill_rebuilds_global_sessions_from_existing_local_records():
+    engine = create_database_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory.begin() as session:
+        started = _broadcast(
+            "GW-01", "backfill-start", "backfill-1", "BROADCAST_STARTED", "2026-08-05T10:00:00+0800"
+        )
+        ended = _broadcast(
+            "GW-01", "backfill-end", "backfill-1", "BROADCAST_ENDED", "2026-08-05T10:00:00+0800",
+            ended="2026-08-05T10:00:20+0800", detected="2026-08-05T10:00:25+0800", duration=20,
+        )
+        assert ingest_message(session, started)
+        assert ingest_message(session, ended)
+        session.execute(delete(DeviceBroadcastObserver))
+        session.execute(delete(DeviceBroadcastSession))
+        assert backfill_global_sessions(session) == 1
+    with session_factory() as session:
+        row = session.scalar(select(DeviceBroadcastSession))
+        assert row.duration_s == 20
+        assert len(row.observers) == 1

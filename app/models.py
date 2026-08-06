@@ -110,6 +110,7 @@ class DeviceBroadcastObserver(Base):
     __tablename__ = "device_broadcast_observers"
     __table_args__ = (
         UniqueConstraint("gateway_id", "gateway_broadcast_id", name="uq_observer_gateway_broadcast"),
+        UniqueConstraint("global_session_id", "gateway_id", name="uq_observer_global_gateway"),
     )
 
     id = Column(Integer, primary_key=True)
