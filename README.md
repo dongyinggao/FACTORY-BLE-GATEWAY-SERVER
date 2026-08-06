@@ -1,6 +1,6 @@
 # Factory BLE Gateway Server
 
-服务端负责订阅蓝牙网关 MQTT 消息、按 `gateway_id + event_id` 幂等入库，并提供网关、设备和广播记录查询页面。
+服务端负责订阅蓝牙网关 MQTT 消息、按 `gateway_id + event_id` 幂等入库，并提供网关、设备和广播记录查询页面。它保留每台网关的原始观测，同时将同一 MAC 的多网关观测融合为一轮全局广播会话。
 
 ## Local development
 
@@ -20,10 +20,20 @@ uvicorn app.main:app --reload
 
 订阅主题：`factory/product-status/gateway/+/events`。
 
-- `broadcast`：保存原始事件；按 `(gateway_id, event_id)` 去重，并按 `(gateway_id, broadcast_id)` 汇总广播开始、结束和持续时间。
+- `broadcast`：保存原始事件；按 `(gateway_id, event_id)` 去重，并按 `(gateway_id, broadcast_id)` 汇总本机广播开始、结束和持续时间。
 - `gateway_health`：保存健康快照，同时更新网关最新健康状态。
 
-网关只上报本地观察到的广播生命周期。网页按网关展示该观察结果，不将其直接解释为全局在线/离线状态。
+## Multi-gateway fusion
+
+网关只上报本地观察到的广播生命周期，不直接判断设备全局在线或离线。服务端按以下规则融合：
+
+- 设备身份是 `device_mac`；设备名称仅用于显示。
+- 已校时的 `BROADCAST_STARTED` 在相差 10 秒内视为同一轮全局广播；多个网关成为该轮的观测节点。
+- 全局开始时间取最早首包时间，最后广播时间取所有节点的最晚末包时间，持续时长据此计算。
+- 仅当全部观测节点结束时关闭全局会话；若某节点的结束事件遗失，最后观测后 15 秒由服务端安全关闭。
+- `time_synced=false` 的事件不跨网关合并，避免使用 Broker 接收时间造成错误融合。
+
+页面首页和设备详情显示全局融合会话；网关详情仍显示该网关的原始本机观察。`GET /api/broadcasts` 保持返回本机会话，`GET /api/global-broadcasts` 返回融合后的会话与观测节点。
 
 ## Deployment
 

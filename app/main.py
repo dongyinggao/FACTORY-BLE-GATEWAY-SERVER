@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,16 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, initialize_database
-from app.models import BroadcastEvent, BroadcastSession, Device, Gateway, GatewayHealth
+from app.ingest import FUSION_IDLE_WINDOW, finalize_stale_global_sessions
+from app.models import (
+    BroadcastEvent,
+    BroadcastSession,
+    Device,
+    DeviceBroadcastObserver,
+    DeviceBroadcastSession,
+    Gateway,
+    GatewayHealth,
+)
 from app.mqtt_consumer import GatewayMqttConsumer
 from app.settings import settings_from_env
 
@@ -23,15 +33,37 @@ settings = settings_from_env()
 consumer = GatewayMqttConsumer(settings)
 CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 GATEWAY_ONLINE_WINDOW = timedelta(seconds=90)
-BROADCAST_ACTIVE_WINDOW = timedelta(seconds=90)
+
+
+async def fusion_maintenance_loop() -> None:
+    """Close incomplete global sessions even while MQTT is otherwise quiet."""
+    while True:
+        await asyncio.sleep(5)
+        try:
+            with SessionLocal.begin() as session:
+                finalized = finalize_stale_global_sessions(session)
+            if finalized:
+                logging.getLogger(__name__).warning(
+                    "Finalized %d stale global broadcast session(s)", finalized
+                )
+        except Exception:
+            logging.getLogger(__name__).exception("Global broadcast maintenance failed")
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     initialize_database()
     consumer.start()
-    yield
-    consumer.stop()
+    maintenance_task = asyncio.create_task(fusion_maintenance_loop())
+    try:
+        yield
+    finally:
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
+        consumer.stop()
 
 
 app = FastAPI(title="Factory BLE Gateway Server", lifespan=lifespan)
@@ -75,15 +107,15 @@ def duration_text(seconds: int | None) -> str:
     return f"{seconds} 秒"
 
 
-def broadcast_state(row: BroadcastSession, now: datetime) -> str:
+def broadcast_state(row: DeviceBroadcastSession, now: datetime) -> str:
     if row.ended_at is not None:
         return "ended"
-    if elapsed_seconds(row.started_at, now) <= int(BROADCAST_ACTIVE_WINDOW.total_seconds()):
+    if row.last_seen_at and now - row.last_seen_at < FUSION_IDLE_WINDOW:
         return "broadcasting"
     return "pending_end"
 
 
-def broadcast_state_text(row: BroadcastSession, now: datetime) -> str:
+def broadcast_state_text(row: DeviceBroadcastSession, now: datetime) -> str:
     return {
         "broadcasting": "广播中",
         "ended": "已结束",
@@ -91,7 +123,7 @@ def broadcast_state_text(row: BroadcastSession, now: datetime) -> str:
     }[broadcast_state(row, now)]
 
 
-def display_duration(row: BroadcastSession, now: datetime) -> str:
+def display_duration(row: DeviceBroadcastSession, now: datetime) -> str:
     return duration_text(row.duration_s if row.duration_s is not None else elapsed_seconds(row.started_at, now))
 
 
@@ -152,12 +184,40 @@ def api_broadcasts(
     } for row in session.scalars(query)]
 
 
+@app.get("/api/global-broadcasts")
+def api_global_broadcasts(
+    device_mac: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_session),
+):
+    query = select(DeviceBroadcastSession).order_by(desc(DeviceBroadcastSession.updated_at)).limit(limit)
+    if device_mac:
+        query = query.where(DeviceBroadcastSession.device_mac == device_mac.upper())
+    return [{
+        "device_mac": row.device_mac,
+        "device_name": row.device_name,
+        "started_at": iso(row.started_at),
+        "last_seen_at": iso(row.last_seen_at),
+        "ended_at": iso(row.ended_at),
+        "duration_s": row.duration_s,
+        "time_synced": row.time_synced,
+        "observer_count": len(row.observers),
+        "observers": [{
+            "gateway_id": observer.gateway_id,
+            "started_at": iso(observer.started_at),
+            "last_seen_at": iso(observer.last_seen_at),
+            "ended_at": iso(observer.ended_at),
+            "last_rssi": observer.last_rssi,
+        } for observer in row.observers],
+    } for row in session.scalars(query)]
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, session: Session = Depends(get_session)):
     now = datetime.now(timezone.utc)
     gateways = session.scalars(select(Gateway).order_by(Gateway.gateway_id)).all()
     broadcasts = session.scalars(
-        select(BroadcastSession).order_by(desc(BroadcastSession.updated_at)).limit(50)
+        select(DeviceBroadcastSession).order_by(desc(DeviceBroadcastSession.updated_at)).limit(50)
     ).all()
     active_sessions = [row for row in broadcasts if broadcast_state(row, now) == "broadcasting"]
     pending_sessions = [row for row in broadcasts if broadcast_state(row, now) == "pending_end"]
@@ -167,8 +227,8 @@ def dashboard(request: Request, session: Session = Depends(get_session)):
         "gateway_online": sum(gateway_state(row, now) == "online" for row in gateways),
         "device_total": session.scalar(select(func.count()).select_from(Device)) or 0,
         "broadcast_24h": session.scalar(
-            select(func.count()).select_from(BroadcastSession)
-            .where(BroadcastSession.started_at >= today_start)
+            select(func.count()).select_from(DeviceBroadcastSession)
+            .where(DeviceBroadcastSession.started_at >= today_start)
         ) or 0,
         "broadcasting_devices": len({row.device_mac for row in active_sessions}),
         "pending_end": len(pending_sessions),
@@ -212,8 +272,8 @@ def device_detail(device_mac: str, request: Request, session: Session = Depends(
     if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
     broadcasts = session.scalars(
-        select(BroadcastSession).where(BroadcastSession.device_mac == device.device_mac)
-        .order_by(desc(BroadcastSession.updated_at)).limit(100)
+        select(DeviceBroadcastSession).where(DeviceBroadcastSession.device_mac == device.device_mac)
+        .order_by(desc(DeviceBroadcastSession.updated_at)).limit(100)
     ).all()
     return templates.TemplateResponse(request, "device_detail.html", {
         "device": device,

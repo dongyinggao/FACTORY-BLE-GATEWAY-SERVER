@@ -65,6 +65,7 @@ Initialize the schema and grant the application account access:
 
 ```bash
 sudo -u postgres psql -d factory_ble_gateway -f migrations/001_initial.sql
+sudo -u postgres psql -d factory_ble_gateway -f migrations/002_multi_gateway_fusion.sql
 sudo -u postgres psql -d factory_ble_gateway -c 'GRANT USAGE ON SCHEMA public TO ble_gateway_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ble_gateway_app; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ble_gateway_app;'
 ```
 
@@ -88,6 +89,9 @@ configuration, then test before reload: `sudo nginx -t && sudo systemctl reload 
 2. Generate a real gateway broadcast and health event.
 3. Verify `journalctl -u factory-ble-gateway-server -f` shows `stored`.
 4. Open `https://ble-gateway-uat.singularmedical.net/` and check the gateway,
-   device MAC, broadcast start/end/duration.
+   device MAC, global broadcast start/last-seen/duration and observer nodes.
 5. Restart the Broker or publish the same MQTT message twice: only one database
    row may exist for `(gateway_id, event_id)`.
+6. Publish start/end records for the same MAC from three gateways within ten
+   seconds. The dashboard must show one global broadcast with three observer
+   nodes, while each gateway page continues to show its own local record.
