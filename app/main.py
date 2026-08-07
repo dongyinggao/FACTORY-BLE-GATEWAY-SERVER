@@ -126,7 +126,7 @@ def broadcast_state_text(row: DeviceBroadcastSession, now: datetime) -> str:
     return {
         "broadcasting": "广播中",
         "ended": "已结束",
-        "incomplete": "超时关闭（观测不完整）",
+        "incomplete": "结束未确认（观测不完整）",
         "partial": "已结束（网关中断）",
         "pending_end": "等待结束",
     }[broadcast_state(row, now)]

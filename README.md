@@ -37,7 +37,7 @@ uvicorn app.main:app --reload
 
 新版网关对持续超过 60 秒的广播每分钟发送一次 `BROADCAST_ACTIVE`。该消息只刷新服务器的
 `last_seen_at`，不替代开始/结束的可靠事件；服务端在最后活动观测后 90 秒仍未收到更新时标记
-`END_TIMEOUT`，而非正常结束。页面顶部还显示服务端 MQTT Consumer 的实时连接状态；Broker 中断时会提示数据可能不是最新。
+`END_TIMEOUT`，页面显示为“结束未确认（观测不完整）”，而非正常结束。页面顶部还显示服务端 MQTT Consumer 的实时连接状态；Broker 中断时会提示数据可能不是最新。
 
 ## Daily dashboard
 
