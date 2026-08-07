@@ -28,6 +28,10 @@ FUSION_START_WINDOW = timedelta(seconds=10)
 # long-running broadcast. Older firmware remains compatible but has lower
 # state confidence once this window expires.
 FUSION_IDLE_WINDOW = timedelta(seconds=90)
+# A gateway is considered unavailable using the same freshness window shown by
+# the web UI. When another gateway has already reported the broadcast end,
+# this distinguishes a missing observer from a missing device end event.
+GATEWAY_OFFLINE_WINDOW = FUSION_IDLE_WINDOW
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -237,9 +241,23 @@ def finalize_stale_global_sessions(session: Session, now: datetime | None = None
         last_seen_at = _as_utc(row.last_seen_at)
         if last_seen_at is None or now - last_seen_at < FUSION_IDLE_WINDOW:
             continue
+        observers = list(row.observers)
+        ended_observers = [observer for observer in observers if observer.ended_at is not None]
+        missing_observers = [observer for observer in observers if observer.ended_at is None]
         row.ended_at = last_seen_at
         row.end_detected_at = now
-        row.close_reason = "END_TIMEOUT"
+        # Name an observer interruption only when a peer did report the end
+        # and every remaining observer gateway is stale. A total MQTT outage
+        # stays END_TIMEOUT because there is no such device-end evidence.
+        missing_gateways = [session.get(Gateway, observer.gateway_id)
+                            for observer in missing_observers]
+        if (ended_observers and missing_observers and
+                all(gateway is None or gateway.last_seen_at is None or
+                    now - _as_utc(gateway.last_seen_at) >= GATEWAY_OFFLINE_WINDOW
+                    for gateway in missing_gateways)):
+            row.close_reason = "OBSERVER_GATEWAY_OFFLINE"
+        else:
+            row.close_reason = "END_TIMEOUT"
         if row.started_at:
             row.duration_s = max(
                 0, int((row.ended_at - _as_utc(row.started_at)).total_seconds())

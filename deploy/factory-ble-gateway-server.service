@@ -1,7 +1,7 @@
 [Unit]
 Description=Factory BLE Gateway MQTT ingest and web service
 After=network-online.target postgresql.service mosquitto.service
-Wants=network-online.target
+Wants=network-online.target mosquitto.service
 
 [Service]
 Type=simple

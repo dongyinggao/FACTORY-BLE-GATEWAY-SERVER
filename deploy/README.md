@@ -58,6 +58,28 @@ MQTT_TOPIC=factory/product-status/gateway/+/events
 MQTT_CLIENT_ID=factory-ble-gateway-ingest-uat
 ```
 
+The Consumer uses a persistent MQTT v3.1.1 session (`clean_session=false`).
+With `paho-mqtt` 2.x it also sends the QoS 1 acknowledgement only after the
+PostgreSQL transaction commits; keep the fixed client ID unchanged. Verify
+`/opt/factory-ble-gateway-server/.venv/bin/python -m pip show paho-mqtt` is
+version 2.x before relying on transaction-bound acknowledgements. Configure
+Mosquitto persistence and a queue large enough for a temporary Consumer outage
+by installing `deploy/mosquitto-ble-gateway-reliable.conf` as
+`/etc/mosquitto/conf.d/ble-gateway-uat.conf`:
+
+```ini
+persistence true
+persistence_location /var/lib/mosquitto/
+autosave_interval 5
+max_queued_messages 100000
+max_queued_bytes 67108864
+```
+
+After changing Broker configuration, validate and restart it with
+`sudo mosquitto -c /etc/mosquitto/mosquitto.conf -t && sudo systemctl restart mosquitto`.
+The database uniqueness rule on `(gateway_id, event_id)` makes the expected QoS
+1 redelivery safe: transport is at-least-once, while database results are unique.
+
 Then run `sudo chmod 600 /etc/factory-ble-gateway-server.env` and
 `sudo chown root:root /etc/factory-ble-gateway-server.env`.
 

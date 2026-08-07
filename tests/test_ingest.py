@@ -2,7 +2,10 @@ from app.database import Base, create_database_engine
 from datetime import datetime, timedelta, timezone
 
 from app.ingest import backfill_global_sessions, finalize_stale_global_sessions, ingest_message
-from app.models import BroadcastSession, DeviceBroadcastObserver, DeviceBroadcastSession
+import app.mqtt_consumer as mqtt_consumer
+from app.mqtt_consumer import GatewayMqttConsumer
+from app.settings import Settings
+from app.models import BroadcastSession, DeviceBroadcastObserver, DeviceBroadcastSession, Gateway
 from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
@@ -145,6 +148,37 @@ def test_unsynchronized_events_do_not_merge_and_stale_session_closes():
         assert row.close_reason == "END_TIMEOUT"
 
 
+def test_stale_observer_gateway_has_a_distinct_close_reason():
+    engine = create_database_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+
+    with session_factory.begin() as session:
+        assert ingest_message(session, _broadcast(
+            "GW-01", "gw1-start", "gw1-round", "BROADCAST_STARTED", base.isoformat()
+        ))
+        assert ingest_message(session, _broadcast(
+            "GW-02", "gw2-start", "gw2-round", "BROADCAST_STARTED",
+            (base + timedelta(seconds=2)).isoformat()
+        ))
+        assert ingest_message(session, _broadcast(
+            "GW-02", "gw2-end", "gw2-round", "BROADCAST_ENDED",
+            (base + timedelta(seconds=2)).isoformat(),
+            ended=(base + timedelta(seconds=20)).isoformat(),
+            detected=(base + timedelta(seconds=25)).isoformat(), duration=18,
+        ))
+        # GW-01 lost power before reporting its end.  GW-02's normal end is
+        # sufficient evidence to avoid labelling the device itself as timed out.
+        session.get(Gateway, "GW-01").last_seen_at = base
+        assert finalize_stale_global_sessions(session, base + timedelta(seconds=120)) == 1
+
+    with session_factory() as session:
+        row = session.scalar(select(DeviceBroadcastSession))
+        assert row.close_reason == "OBSERVER_GATEWAY_OFFLINE"
+        assert row.ended_at.replace(tzinfo=timezone.utc) == base + timedelta(seconds=20)
+
+
 def test_backfill_rebuilds_global_sessions_from_existing_local_records():
     engine = create_database_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -187,3 +221,103 @@ def test_activity_refresh_keeps_a_long_broadcast_open():
         row = session.scalar(select(DeviceBroadcastSession))
         assert row.ended_at is None
         assert row.last_seen_at.replace(tzinfo=timezone.utc) == active_at
+
+
+def test_mqtt_consumer_status_tracks_connect_and_disconnect():
+    consumer = GatewayMqttConsumer(Settings(
+        database_url="sqlite:///:memory:", mqtt_host="localhost", mqtt_port=1883,
+        mqtt_username="", mqtt_password="", mqtt_topic="factory/test", mqtt_client_id="test-client"
+    ))
+    assert consumer._manual_ack_enabled is True
+
+    class FakeClient:
+        def __init__(self):
+            self.subscription = None
+
+        def subscribe(self, topic, qos):
+            self.subscription = (topic, qos)
+
+    client = FakeClient()
+    assert consumer.status_snapshot()["connected"] is False
+    consumer._on_connect(client, None, None, 0)
+    assert client.subscription == ("factory/test", 1)
+    assert consumer.status_snapshot()["connected"] is True
+    consumer._on_disconnect(client, None, None, 7, None)
+    status = consumer.status_snapshot()
+    assert status["connected"] is False
+    assert status["reason"] == "7"
+
+
+def test_mqtt_consumer_acks_only_after_database_commit(monkeypatch):
+    consumer = GatewayMqttConsumer(Settings(
+        database_url="sqlite:///:memory:", mqtt_host="localhost", mqtt_port=1883,
+        mqtt_username="", mqtt_password="", mqtt_topic="factory/test", mqtt_client_id="test-client"
+    ))
+    completed = []
+
+    class Transaction:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, traceback):
+            completed.append(exc_type is None)
+            return False
+
+    class SessionFactory:
+        @staticmethod
+        def begin():
+            return Transaction()
+
+    class FakeClient:
+        def __init__(self):
+            self.acks = []
+
+        def ack(self, message_id, qos):
+            assert completed == [True]
+            self.acks.append((message_id, qos))
+            return mqtt_consumer.mqtt.MQTT_ERR_SUCCESS
+
+    class Message:
+        topic = "factory/test"
+        payload = b'{"gateway_id":"GW-01","event_id":"event-1"}'
+        mid = 42
+        qos = 1
+
+    monkeypatch.setattr(mqtt_consumer, "SessionLocal", SessionFactory)
+    monkeypatch.setattr(mqtt_consumer, "ingest_message", lambda session, payload: True)
+    client = FakeClient()
+    consumer._on_message(client, None, Message())
+    assert client.acks == [(42, 1)]
+
+
+def test_mqtt_consumer_does_not_ack_database_failure(monkeypatch):
+    consumer = GatewayMqttConsumer(Settings(
+        database_url="sqlite:///:memory:", mqtt_host="localhost", mqtt_port=1883,
+        mqtt_username="", mqtt_password="", mqtt_topic="factory/test", mqtt_client_id="test-client"
+    ))
+
+    class Transaction:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class SessionFactory:
+        @staticmethod
+        def begin():
+            return Transaction()
+
+    class FakeClient:
+        def ack(self, message_id, qos):
+            raise AssertionError("failed database write must not be acknowledged")
+
+    class Message:
+        topic = "factory/test"
+        payload = b'{"gateway_id":"GW-01","event_id":"event-1"}'
+        mid = 43
+        qos = 1
+
+    monkeypatch.setattr(mqtt_consumer, "SessionLocal", SessionFactory)
+    monkeypatch.setattr(mqtt_consumer, "ingest_message", lambda session, payload: (_ for _ in ()).throw(RuntimeError("db down")))
+    consumer._on_message(FakeClient(), None, Message())

@@ -114,6 +114,8 @@ def broadcast_state(row: DeviceBroadcastSession, now: datetime) -> str:
     if row.ended_at is not None:
         if row.close_reason in ("STALE_TIMEOUT", "END_TIMEOUT"):
             return "incomplete"
+        if row.close_reason == "OBSERVER_GATEWAY_OFFLINE":
+            return "partial"
         return "ended"
     if row.last_seen_at and now - row.last_seen_at < FUSION_IDLE_WINDOW:
         return "broadcasting"
@@ -125,6 +127,7 @@ def broadcast_state_text(row: DeviceBroadcastSession, now: datetime) -> str:
         "broadcasting": "广播中",
         "ended": "已结束",
         "incomplete": "超时关闭（观测不完整）",
+        "partial": "已结束（网关中断）",
         "pending_end": "等待结束",
     }[broadcast_state(row, now)]
 
@@ -155,6 +158,7 @@ def daily_summary(session: Session, selected_day: date, now: datetime) -> dict:
     gateways = session.scalars(select(Gateway).order_by(Gateway.gateway_id)).all()
     active = [row for row in sessions if broadcast_state(row, now) == "broadcasting"]
     timeouts = [row for row in sessions if row.close_reason in ("STALE_TIMEOUT", "END_TIMEOUT")]
+    observer_losses = [row for row in sessions if row.close_reason == "OBSERVER_GATEWAY_OFFLINE"]
     long_active = [row for row in active if now - _utc(row.started_at) >= LONG_BROADCAST_THRESHOLD]
     per_device: dict[str, dict] = {}
     for row in sessions:
@@ -193,6 +197,7 @@ def daily_summary(session: Session, selected_day: date, now: datetime) -> dict:
         "active": active,
         "long_active": long_active,
         "timeouts": timeouts,
+        "observer_losses": observer_losses,
         "frequent": frequent,
         "offline": offline,
         "gateway_total": len(gateways),
@@ -215,7 +220,13 @@ templates.env.globals["gateway_state"] = gateway_state
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "mqtt_topic": settings.mqtt_topic}
+    return {"status": "ok", "mqtt_topic": settings.mqtt_topic,
+            "mqtt_consumer": consumer.status_snapshot()}
+
+
+@app.get("/api/runtime-status")
+def api_runtime_status():
+    return {"mqtt_consumer": consumer.status_snapshot()}
 
 
 @app.get("/api/gateways")
@@ -300,6 +311,10 @@ def api_daily(day: date | None = None, session: Session = Depends(get_session)):
         "anomalies": {
             "long_broadcasts": [{"device_mac": row.device_mac, "duration_s": elapsed_seconds(row.started_at, now)} for row in summary["long_active"]],
             "end_timeouts": [{"device_mac": row.device_mac, "close_reason": row.close_reason} for row in summary["timeouts"]],
+            "observer_gateway_interruptions": [
+                {"device_mac": row.device_mac, "close_reason": row.close_reason}
+                for row in summary["observer_losses"]
+            ],
             "frequent_broadcasts": [{"device_mac": row["device_mac"], "count": row["window_count"]} for row in summary["frequent"]],
             "offline_gateways": [row.gateway_id for row in summary["offline"]],
         },
