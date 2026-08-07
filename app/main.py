@@ -109,6 +109,8 @@ def duration_text(seconds: int | None) -> str:
 
 def broadcast_state(row: DeviceBroadcastSession, now: datetime) -> str:
     if row.ended_at is not None:
+        if row.close_reason == "STALE_TIMEOUT":
+            return "incomplete"
         return "ended"
     if row.last_seen_at and now - row.last_seen_at < FUSION_IDLE_WINDOW:
         return "broadcasting"
@@ -119,6 +121,7 @@ def broadcast_state_text(row: DeviceBroadcastSession, now: datetime) -> str:
     return {
         "broadcasting": "广播中",
         "ended": "已结束",
+        "incomplete": "超时关闭（观测不完整）",
         "pending_end": "等待结束",
     }[broadcast_state(row, now)]
 
@@ -200,6 +203,7 @@ def api_global_broadcasts(
         "last_seen_at": iso(row.last_seen_at),
         "ended_at": iso(row.ended_at),
         "duration_s": row.duration_s,
+        "close_reason": row.close_reason,
         "time_synced": row.time_synced,
         "observer_count": len(row.observers),
         "observers": [{

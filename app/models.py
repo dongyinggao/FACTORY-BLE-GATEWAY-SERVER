@@ -94,6 +94,7 @@ class DeviceBroadcastSession(Base):
     ended_at = Column(DateTime(timezone=True), index=True)
     end_detected_at = Column(DateTime(timezone=True))
     duration_s = Column(Integer)
+    close_reason = Column(String(32))
     time_synced = Column(Boolean, default=False, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, nullable=False, index=True)
 

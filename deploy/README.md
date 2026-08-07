@@ -67,6 +67,7 @@ Initialize the schema and grant the application account access:
 sudo -u postgres psql -d factory_ble_gateway -f migrations/001_initial.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/002_multi_gateway_fusion.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/003_fusion_one_observer_per_gateway.sql
+sudo -u postgres psql -d factory_ble_gateway -f migrations/004_fusion_close_reason.sql
 sudo -u postgres psql -d factory_ble_gateway -c 'GRANT USAGE ON SCHEMA public TO ble_gateway_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ble_gateway_app; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ble_gateway_app;'
 ```
 
@@ -93,6 +94,28 @@ curl http://127.0.0.1:8000/healthz
 The supplied Nginx file is a complete UAT virtual host: it preserves `/ota/`
 and proxies all other routes to the web service. Back up the existing host
 configuration, then test before reload: `sudo nginx -t && sudo systemctl reload nginx`.
+
+## Updating UAT without GitHub access
+
+From the development computer, deploy only a clean, committed working tree:
+
+```bash
+./tools/deploy_uat.sh ble_gateway@192.168.19.21
+```
+
+The script packages `HEAD` with `git archive`, copies it using `scp`, stops the
+service briefly, applies only migrations absent from `schema_migrations`, then
+starts the service and calls `/healthz`. It does not run `git push`, and the
+server does not need GitHub access.
+
+The present UAT server predates the migration ledger. Before first using the
+script, seed the ledger only after verifying migrations `001` through `004`
+were already applied:
+
+```bash
+sudo -u postgres psql -d factory_ble_gateway -c "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());"
+sudo -u postgres psql -d factory_ble_gateway -c "INSERT INTO schema_migrations (name) VALUES ('001_initial.sql'), ('002_multi_gateway_fusion.sql'), ('003_fusion_one_observer_per_gateway.sql'), ('004_fusion_close_reason.sql') ON CONFLICT DO NOTHING;"
+```
 
 ## 4. Acceptance
 

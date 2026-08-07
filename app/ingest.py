@@ -97,6 +97,7 @@ def _recompute_global_session(global_session: DeviceBroadcastSession) -> None:
     if observers and all(row.ended_at is not None for row in observers):
         global_session.ended_at = global_session.last_seen_at
         global_session.end_detected_at = max(detected) if detected else global_session.ended_at
+        global_session.close_reason = "ALL_OBSERVERS_ENDED"
         if global_session.started_at and global_session.ended_at:
             global_session.duration_s = max(
                 0, int((global_session.ended_at - global_session.started_at).total_seconds())
@@ -107,6 +108,7 @@ def _recompute_global_session(global_session: DeviceBroadcastSession) -> None:
         global_session.ended_at = None
         global_session.end_detected_at = None
         global_session.duration_s = None
+        global_session.close_reason = None
     global_session.updated_at = _now()
 
 
@@ -227,6 +229,7 @@ def finalize_stale_global_sessions(session: Session, now: datetime | None = None
             continue
         row.ended_at = last_seen_at
         row.end_detected_at = now
+        row.close_reason = "STALE_TIMEOUT"
         if row.started_at:
             row.duration_s = max(
                 0, int((row.ended_at - _as_utc(row.started_at)).total_seconds())

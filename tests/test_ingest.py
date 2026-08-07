@@ -137,9 +137,11 @@ def test_unsynchronized_events_do_not_merge_and_stale_session_closes():
         now = base + timedelta(seconds=30)
         assert finalize_stale_global_sessions(session, now) == 2
     with session_factory() as session:
-        assert session.scalar(select(DeviceBroadcastSession).where(
+        row = session.scalar(select(DeviceBroadcastSession).where(
             DeviceBroadcastSession.ended_at.is_not(None)
-        )) is not None
+        ))
+        assert row is not None
+        assert row.close_reason == "STALE_TIMEOUT"
 
 
 def test_backfill_rebuilds_global_sessions_from_existing_local_records():
