@@ -62,6 +62,7 @@ class BroadcastSession(Base):
     device_mac = Column(ForeignKey("devices.device_mac"), index=True)
     device_name = Column(String(64))
     started_at = Column(DateTime(timezone=True), index=True)
+    last_seen_at = Column(DateTime(timezone=True), index=True)
     ended_at = Column(DateTime(timezone=True))
     end_detected_at = Column(DateTime(timezone=True))
     duration_s = Column(Integer)

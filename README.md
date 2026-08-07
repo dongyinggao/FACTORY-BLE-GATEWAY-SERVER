@@ -35,6 +35,16 @@ uvicorn app.main:app --reload
 
 页面首页和设备详情显示全局融合会话；网关详情仍显示该网关的原始本机观察。`GET /api/broadcasts` 保持返回本机会话，`GET /api/global-broadcasts` 返回融合后的会话与观测节点。
 
+新版网关对持续超过 60 秒的广播每分钟发送一次 `BROADCAST_ACTIVE`。该消息只刷新服务器的
+`last_seen_at`，不替代开始/结束的可靠事件；服务端在最后活动观测后 90 秒仍未收到更新时标记
+`END_TIMEOUT`，而非正常结束。
+
+## Daily dashboard
+
+`/daily` 提供按中国标准时间统计的每日看板，展示当日有广播的去重设备数、全局广播轮次、
+网关在线数、长广播（默认 1 小时）、结束超时、高频广播和离线网关。`GET /api/daily` 提供同一
+聚合数据。这里的“当日有广播设备”不等同于设备业务在线状态。
+
 ## Deployment
 
 UAT 服务器部署、PostgreSQL 初始化、systemd 与 Nginx 配置见

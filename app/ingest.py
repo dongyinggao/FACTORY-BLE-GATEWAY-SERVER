@@ -23,7 +23,11 @@ LOGGER = logging.getLogger(__name__)
 FUSION_START_WINDOW = timedelta(seconds=10)
 # A missing BROADCAST_ENDED must not leave a global session open forever.  This
 # is a server-side safety net; it does not replace the gateway's 5 s detector.
-FUSION_IDLE_WINDOW = timedelta(seconds=15)
+# Gateways with current firmware refresh an active broadcast every 60 seconds.
+# 90 seconds tolerates one delayed update without prematurely closing a real,
+# long-running broadcast. Older firmware remains compatible but has lower
+# state confidence once this window expires.
+FUSION_IDLE_WINDOW = timedelta(seconds=90)
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -201,12 +205,18 @@ def _update_global_observation(
         session.add(observer)
         global_session.observers.append(observer)
     observer.started_at = local_session.started_at or observer.started_at
-    observer.last_seen_at = local_session.ended_at or local_session.started_at or observer.last_seen_at
+    observer.last_seen_at = (local_session.last_seen_at or local_session.ended_at or
+                             local_session.started_at or observer.last_seen_at)
     observer.last_rssi = local_session.last_rssi
     observer.updated_at = _now()
     if payload["event"] == "BROADCAST_ENDED":
         observer.ended_at = local_session.ended_at
         observer.end_detected_at = local_session.end_detected_at
+    elif payload["event"] == "BROADCAST_ACTIVE":
+        # A late activity update is stronger evidence than a previous timeout
+        # closure and reopens the global session for all observers.
+        observer.ended_at = None
+        observer.end_detected_at = None
     global_session.device_name = payload.get("device_name") or global_session.device_name
     session.flush()
     _recompute_global_session(global_session)
@@ -229,7 +239,7 @@ def finalize_stale_global_sessions(session: Session, now: datetime | None = None
             continue
         row.ended_at = last_seen_at
         row.end_detected_at = now
-        row.close_reason = "STALE_TIMEOUT"
+        row.close_reason = "END_TIMEOUT"
         if row.started_at:
             row.duration_s = max(
                 0, int((row.ended_at - _as_utc(row.started_at)).total_seconds())
@@ -338,12 +348,19 @@ def ingest_broadcast(session: Session, payload: dict[str, Any]) -> bool:
         session.add(session_row)
     session_row.device_name = payload.get("device_name") or session_row.device_name
     session_row.started_at = parse_timestamp(payload.get("broadcast_started_at")) or session_row.started_at
+    session_row.last_seen_at = (parse_timestamp(payload.get("broadcast_ended_at")) or
+                                parse_timestamp(payload.get("recorded_at")) or
+                                session_row.last_seen_at)
     session_row.last_rssi = payload.get("observed_rssi", session_row.last_rssi)
     session_row.updated_at = _now()
     if payload["event"] == "BROADCAST_ENDED":
         session_row.ended_at = parse_timestamp(payload.get("broadcast_ended_at"))
         session_row.end_detected_at = parse_timestamp(payload.get("end_detected_at"))
         session_row.duration_s = payload.get("broadcast_duration_s")
+    elif payload["event"] == "BROADCAST_ACTIVE":
+        session_row.ended_at = None
+        session_row.end_detected_at = None
+        session_row.duration_s = None
     _update_global_observation(session, payload, session_row)
     finalize_stale_global_sessions(session)
     return True

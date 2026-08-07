@@ -30,6 +30,7 @@ def test_broadcast_is_idempotent_and_aggregated():
         row = session.scalar(select(BroadcastSession))
         assert row.duration_s == 20
         assert row.ended_at.isoformat().startswith("2026-08-05T02:00:20")
+        assert row.last_seen_at.isoformat().startswith("2026-08-05T02:00:20")
 
 
 def test_health_is_idempotent():
@@ -134,14 +135,14 @@ def test_unsynchronized_events_do_not_merge_and_stale_session_closes():
         assert ingest_message(session, payload_two)
         rows = session.scalars(select(DeviceBroadcastSession)).all()
         assert len(rows) == 2
-        now = base + timedelta(seconds=30)
+        now = base + timedelta(seconds=120)
         assert finalize_stale_global_sessions(session, now) == 2
     with session_factory() as session:
         row = session.scalar(select(DeviceBroadcastSession).where(
             DeviceBroadcastSession.ended_at.is_not(None)
         ))
         assert row is not None
-        assert row.close_reason == "STALE_TIMEOUT"
+        assert row.close_reason == "END_TIMEOUT"
 
 
 def test_backfill_rebuilds_global_sessions_from_existing_local_records():
@@ -165,3 +166,24 @@ def test_backfill_rebuilds_global_sessions_from_existing_local_records():
         row = session.scalar(select(DeviceBroadcastSession))
         assert row.duration_s == 20
         assert len(row.observers) == 1
+
+
+def test_activity_refresh_keeps_a_long_broadcast_open():
+    engine = create_database_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    started = _broadcast("GW-01", "long-start", "long-1", "BROADCAST_STARTED", base.isoformat())
+    active_at = base + timedelta(seconds=60)
+    active = _broadcast("GW-01", "long-active", "long-1", "BROADCAST_ACTIVE", base.isoformat(),
+                        ended=active_at.isoformat(), duration=60)
+    with session_factory.begin() as session:
+        assert ingest_message(session, started)
+        assert ingest_message(session, active)
+        # An activity observation at T+60 keeps the session open at T+120,
+        # because the 90-second server timeout has not expired.
+        assert finalize_stale_global_sessions(session, base + timedelta(seconds=120)) == 0
+    with session_factory() as session:
+        row = session.scalar(select(DeviceBroadcastSession))
+        assert row.ended_at is None
+        assert row.last_seen_at.replace(tzinfo=timezone.utc) == active_at

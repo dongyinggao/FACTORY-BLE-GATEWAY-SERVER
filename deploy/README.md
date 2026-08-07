@@ -68,6 +68,7 @@ sudo -u postgres psql -d factory_ble_gateway -f migrations/001_initial.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/002_multi_gateway_fusion.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/003_fusion_one_observer_per_gateway.sql
 sudo -u postgres psql -d factory_ble_gateway -f migrations/004_fusion_close_reason.sql
+sudo -u postgres psql -d factory_ble_gateway -f migrations/005_broadcast_activity.sql
 sudo -u postgres psql -d factory_ble_gateway -c 'GRANT USAGE ON SCHEMA public TO ble_gateway_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ble_gateway_app; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ble_gateway_app;'
 ```
 

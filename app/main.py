@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -33,6 +33,9 @@ settings = settings_from_env()
 consumer = GatewayMqttConsumer(settings)
 CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 GATEWAY_ONLINE_WINDOW = timedelta(seconds=90)
+LONG_BROADCAST_THRESHOLD = timedelta(hours=1)
+FREQUENT_BROADCAST_WINDOW = timedelta(minutes=10)
+FREQUENT_BROADCAST_COUNT = 5
 
 
 async def fusion_maintenance_loop() -> None:
@@ -109,7 +112,7 @@ def duration_text(seconds: int | None) -> str:
 
 def broadcast_state(row: DeviceBroadcastSession, now: datetime) -> str:
     if row.ended_at is not None:
-        if row.close_reason == "STALE_TIMEOUT":
+        if row.close_reason in ("STALE_TIMEOUT", "END_TIMEOUT"):
             return "incomplete"
         return "ended"
     if row.last_seen_at and now - row.last_seen_at < FUSION_IDLE_WINDOW:
@@ -134,6 +137,73 @@ def gateway_state(gateway: Gateway, now: datetime) -> str:
     if gateway.last_seen_at is None:
         return "offline"
     return "online" if elapsed_seconds(gateway.last_seen_at, now) <= int(GATEWAY_ONLINE_WINDOW.total_seconds()) else "offline"
+
+
+def china_day_bounds(selected_day: date) -> tuple[datetime, datetime]:
+    start = datetime.combine(selected_day, time.min, tzinfo=CHINA_TIMEZONE)
+    return start.astimezone(timezone.utc), (start + timedelta(days=1)).astimezone(timezone.utc)
+
+
+def daily_summary(session: Session, selected_day: date, now: datetime) -> dict:
+    day_start, day_end = china_day_bounds(selected_day)
+    sessions = session.scalars(
+        select(DeviceBroadcastSession)
+        .where(DeviceBroadcastSession.started_at >= day_start,
+               DeviceBroadcastSession.started_at < day_end)
+        .order_by(desc(DeviceBroadcastSession.updated_at))
+    ).all()
+    gateways = session.scalars(select(Gateway).order_by(Gateway.gateway_id)).all()
+    active = [row for row in sessions if broadcast_state(row, now) == "broadcasting"]
+    timeouts = [row for row in sessions if row.close_reason in ("STALE_TIMEOUT", "END_TIMEOUT")]
+    long_active = [row for row in active if now - _utc(row.started_at) >= LONG_BROADCAST_THRESHOLD]
+    per_device: dict[str, dict] = {}
+    for row in sessions:
+        entry = per_device.setdefault(row.device_mac, {
+            "device_mac": row.device_mac,
+            "device_name": row.device_name,
+            "count": 0,
+            "duration_s": 0,
+            "latest": row,
+            "timestamps": [],
+        })
+        entry["count"] += 1
+        entry["duration_s"] += row.duration_s if row.duration_s is not None else elapsed_seconds(row.started_at, now)
+        if row.updated_at > entry["latest"].updated_at:
+            entry["latest"] = row
+        if row.started_at:
+            entry["timestamps"].append(_utc(row.started_at))
+
+    frequent = []
+    for entry in per_device.values():
+        times = sorted(entry.pop("timestamps"))
+        peak_count = 0
+        for index, timestamp in enumerate(times):
+            window_count = sum(candidate - timestamp <= FREQUENT_BROADCAST_WINDOW
+                               for candidate in times[index:])
+            peak_count = max(peak_count, window_count)
+        if peak_count >= FREQUENT_BROADCAST_COUNT:
+            entry["window_count"] = peak_count
+            frequent.append(entry)
+    offline = [row for row in gateways if gateway_state(row, now) == "offline"]
+    return {
+        "day_start": day_start,
+        "day_end": day_end,
+        "sessions": sessions,
+        "devices": sorted(per_device.values(), key=lambda item: item["latest"].updated_at, reverse=True),
+        "active": active,
+        "long_active": long_active,
+        "timeouts": timeouts,
+        "frequent": frequent,
+        "offline": offline,
+        "gateway_total": len(gateways),
+        "gateway_online": len(gateways) - len(offline),
+    }
+
+
+def _utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 templates.env.filters["cn_time"] = china_time
@@ -214,6 +284,39 @@ def api_global_broadcasts(
             "last_rssi": observer.last_rssi,
         } for observer in row.observers],
     } for row in session.scalars(query)]
+
+
+@app.get("/api/daily")
+def api_daily(day: date | None = None, session: Session = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    selected_day = day or now.astimezone(CHINA_TIMEZONE).date()
+    summary = daily_summary(session, selected_day, now)
+    return {
+        "day": selected_day.isoformat(),
+        "active_devices": len({row.device_mac for row in summary["active"]}),
+        "broadcast_sessions": len(summary["sessions"]),
+        "gateway_online": summary["gateway_online"],
+        "gateway_total": summary["gateway_total"],
+        "anomalies": {
+            "long_broadcasts": [{"device_mac": row.device_mac, "duration_s": elapsed_seconds(row.started_at, now)} for row in summary["long_active"]],
+            "end_timeouts": [{"device_mac": row.device_mac, "close_reason": row.close_reason} for row in summary["timeouts"]],
+            "frequent_broadcasts": [{"device_mac": row["device_mac"], "count": row["window_count"]} for row in summary["frequent"]],
+            "offline_gateways": [row.gateway_id for row in summary["offline"]],
+        },
+    }
+
+
+@app.get("/daily", response_class=HTMLResponse)
+def daily_dashboard(request: Request, day: date | None = None,
+                    session: Session = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    selected_day = day or now.astimezone(CHINA_TIMEZONE).date()
+    return templates.TemplateResponse(request, "daily_dashboard.html", {
+        "summary": daily_summary(session, selected_day, now),
+        "selected_day": selected_day,
+        "now": now,
+        "long_threshold_s": int(LONG_BROADCAST_THRESHOLD.total_seconds()),
+    })
 
 
 @app.get("/", response_class=HTMLResponse)
